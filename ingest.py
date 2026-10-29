@@ -1,48 +1,91 @@
 import os
 import logging
+from dotenv import load_dotenv
+
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from pinecone import Pinecone, ServerlessSpec
+from langchain_pinecone import PineconeVectorStore
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ingest")
 
-PERSIST_DIRECTORY = "./vectorstore"
+INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "tp4-rag-index")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 
 def get_embeddings():
-    """Usa un modelo de embeddings local (MiniLM) para no depender de llamadas a API externa."""
+    """Usa el modelo local MiniLM (genera vectores de 384 dimensiones)."""
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 
-def run_ingestion(data_dir: str = "./data"):
-    if os.path.exists(PERSIST_DIRECTORY) and os.listdir(PERSIST_DIRECTORY):
-        logger.info(f"⚡ Base vectorial encontrada en '{PERSIST_DIRECTORY}'. Omitiendo re-indexación.")
-        embeddings = get_embeddings()
-        return Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embeddings)
+def init_pinecone_index(dimension: int = 384):
+    """Verifica si el índice existe en Pinecone Serverless; de lo contrario, lo crea."""
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    existing_indexes = [idx.name for idx in pc.list_indexes()]
 
-    logger.info(f"📂 Cargar documentos desde '{data_dir}'...")
+    if INDEX_NAME not in existing_indexes:
+        logger.info(f"🌲 Creando índice Serverless en Pinecone: '{INDEX_NAME}'...")
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=dimension,
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud="aws",
+                region="us-east-1"
+            )
+        )
+        logger.info("✅ Índice en Pinecone creado exitosamente.")
+    else:
+        logger.info(f"⚡ El índice '{INDEX_NAME}' ya existe en Pinecone.")
+
+    return pc
+
+
+def run_ingestion(data_dir: str = "./data"):
+    if not PINECONE_API_KEY:
+        raise ValueError("❌ No se encontró PINECONE_API_KEY en el archivo .env")
+
+    # 1. Asegurar la existencia del índice en la nube
+    init_pinecone_index(dimension=384)
+
+    # 2. Cargar documentos
+    logger.info(f"📂 Cargando documentos desde '{data_dir}'...")
     loader = DirectoryLoader(data_dir, glob="*.txt", loader_cls=TextLoader, loader_kwargs={"encoding": "utf-8"})
     docs = loader.load()
 
     if not docs:
         raise FileNotFoundError(f"No se encontraron archivos .txt en '{data_dir}'.")
 
+    # 3. Aplicar Chunking
     logger.info(f"✂️ Aplicando chunking a {len(docs)} documentos...")
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
+        chunk_size=600,
         chunk_overlap=50,
         length_function=len
     )
     chunks = text_splitter.split_documents(docs)
 
-    logger.info("💾 Guardando embeddings en ChromaDB local...")
+    # 4. Enriquecer con metadatos explícitos
+    for chunk in chunks:
+        file_name = os.path.basename(chunk.metadata.get("source", "desconocido"))
+        chunk.metadata["source"] = file_name
+        chunk.metadata["category"] = "tecnico"
+
+    # 5. Indexar en Pinecone VectorStore
+    logger.info("☁️ Subiendo vectores y metadatos a Pinecone Serverless...")
     embeddings = get_embeddings()
-    vectorstore = Chroma.from_documents(
+    vectorstore = PineconeVectorStore.from_documents(
         documents=chunks,
         embedding=embeddings,
-        persist_directory=PERSIST_DIRECTORY
+        index_name=INDEX_NAME
     )
-    logger.info("✅ Persistencia en ChromaDB completada.")
-    return vectorstore
+    logger.info("✅ Ingesta en Pinecone completada.")
+    return vectorstore, chunks
+
+
+if __name__ == "__main__":
+    run_ingestion()

@@ -1,43 +1,31 @@
-import asyncio
-from dotenv import load_dotenv
-from rag_chain import get_rag_response
-
-load_dotenv()
+from ingest import run_ingestion
+from rag_system import RAGSystem
+from evaluate import run_evaluation
 
 
-async def main():
-    print("========================================")
-    print("PROBANDO SISTEMA RAG LOCAL (TP 3)")
-    print("========================================\n")
+def main():
+    print("============================================================")
+    print("🚀 PRE-ENTREGA 4: SISTEMA RAG ESCALABLE EN LA NUBE CON PINECONE")
+    print("============================================================\n")
 
-    # 1. Caso 1: Pregunta cuya respuesta SÍ está en los documentos
-    pregunta_valida = "¿Qué es ChromaDB y cómo funciona su persistencia local?"
-    print("--- 1. Prueba con Pregunta Válida ---")
-    print(f"Pregunta: {pregunta_valida}\n")
-    
-    try:
-        respuesta1 = await get_rag_response(pregunta_valida)
-        print("✅ Respuesta Validada:")
-        print(f"• Respuesta: {respuesta1.respuesta}")
-        print(f"• Fuentes:   {respuesta1.fuentes}\n")
-    except Exception as e:
-        print(f"❌ Error en prueba 1: {e}\n")
+    # 1. Ejecutar Ingesta
+    print("1️⃣ Verificando e indexando documentos en Pinecone Serverless...")
+    run_ingestion()
 
-    print("=" * 50 + "\n")
+    # 2. Prueba de Consulta Híbrida
+    print("\n2️⃣ Ejecutando consulta de prueba con Búsqueda Híbrida (BM25 + Pinecone)...")
+    rag = RAGSystem()
+    pregunta = "¿Qué ventaja ofrece Pinecone Serverless en producción?"
+    resultado = rag.query(pregunta)
 
-    # 2. Caso 2: Pregunta Trampa (NO está en los documentos)
-    pregunta_trampa = "¿Cómo se despliega un cluster de Kubernetes en Google Cloud?"
-    print("--- 2. Prueba con Pregunta Trampa (Filtro Anti-Alucinación) ---")
-    print(f"Pregunta: {pregunta_trampa}\n")
-    
-    try:
-        respuesta2 = await get_rag_response(pregunta_trampa)
-        print("✅ Respuesta Validada:")
-        print(f"• Respuesta: {respuesta2.respuesta}")
-        print(f"• Fuentes:   {respuesta2.fuentes}\n")
-    except Exception as e:
-        print(f"❌ Error en prueba 2: {e}\n")
+    print(f"\n❓ Pregunta: {pregunta}")
+    print(f"💬 Respuesta: {resultado['respuesta']}")
+    print(f"📚 Fuentes recuperadas: {resultado['fuentes']}")
+
+    # 3. Evaluación de Métricas
+    print("\n3️⃣ Evaluando métricas del sistema con Golden Set...")
+    run_evaluation()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
